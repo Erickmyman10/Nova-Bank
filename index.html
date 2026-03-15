@@ -1072,6 +1072,7 @@ select.fi{cursor:pointer;-webkit-appearance:none}
 /* ═══════════════════════════════════════════
    DATA LAYER  ·  localStorage
 ═══════════════════════════════════════════ */
+const APP_VER = 'nb6_v3'; // bump this any time you need a fresh seed
 const DB = {
   _k: k => 'nb6_' + k,
   get(k)    { try{ return JSON.parse(localStorage.getItem(this._k(k))) }catch{ return null } },
@@ -1093,7 +1094,10 @@ const DB = {
 
 /* ─── SEED ─── */
 function seed(){
-  if(Object.keys(DB.users()).length) return;
+  // If version matches AND users exist, skip
+  if(localStorage.getItem('nb6_appver') === APP_VER && Object.keys(DB.users()).length > 0) return;
+  // Fresh start — clear any stale data
+  localStorage.setItem('nb6_appver', APP_VER);
   const colors = ['#0D6E5F','#1E3A8A','#6D28D9','#92400E','#065F46','#991B1B','#B45309'];
   DB.setUsers({
     'admin@novabank.io': {
@@ -1177,28 +1181,36 @@ function showForm(f){
 function fillDemo(e,p){ $('li-em').value=e; $('li-pw').value=p; }
 
 function doLogin(){
-  const e = $('li-em').value.trim().toLowerCase();
-  const p = $('li-pw').value;
-  const err = $('li-err');
-  err.style.display = 'none';
-  $('li-notice').innerHTML = '';
-  const u = DB.users()[e];
-  if(!u || u.pw !== p){
-    err.textContent = 'Incorrect email or password.';
-    err.style.display = 'block';
-    return;
+  try {
+    const e = $('li-em').value.trim().toLowerCase();
+    const p = $('li-pw').value;
+    const err = $('li-err');
+    err.style.display = 'none';
+    $('li-notice').innerHTML = '';
+    if(!e || !p){ err.textContent='Please enter your email and password.'; err.style.display='block'; return; }
+    const users = DB.users();
+    const u = users[e];
+    if(!u || u.pw !== p){
+      err.textContent = 'Incorrect email or password.';
+      err.style.display = 'block';
+      return;
+    }
+    if(u.status === 'pending'){
+      err.textContent = 'Your account is pending admin approval. Please wait — the admin will activate your account and add your opening balance.';
+      err.style.display = 'block';
+      return;
+    }
+    if(u.status === 'rejected'){
+      err.textContent = 'Your account application was not approved. Please contact support.';
+      err.style.display = 'block';
+      return;
+    }
+    loginSuccess(u);
+  } catch(err){
+    console.error('Login error:', err);
+    $('li-err').textContent = 'An error occurred. Please try again.';
+    $('li-err').style.display = 'block';
   }
-  if(u.status === 'pending'){
-    err.textContent = 'Your account is pending admin approval. Please wait — the admin will activate your account and add your opening balance.';
-    err.style.display = 'block';
-    return;
-  }
-  if(u.status === 'rejected'){
-    err.textContent = 'Your account application was not approved. Please contact support.';
-    err.style.display = 'block';
-    return;
-  }
-  loginSuccess(u);
 }
 
 function doRegister(){
@@ -1679,8 +1691,9 @@ function modBal(email,acct,delta){
 function quickCredit(email,amt){
   const users=DB.users(), u=users[email];
   u.checking+=amt; DB.setUsers(users);
+  DB.addTx(u.id,{icon:'💳',name:'Admin Quick Credit — Checking',cat:'Administrative',amount:amt,date:new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}),type:'income'});
   if(u.email===CU?.email){ CU.checking=u.checking; refreshSidebar(); }
-  toast('+$'+amt.toLocaleString()+' credited to '+u.fn,"'s checking",'ok');
+  toast('+$'+amt.toLocaleString()+' credited to '+u.fn+"'s checking",'ok');
   buildAdmin();
 }
 
@@ -1798,7 +1811,14 @@ function downloadReceipt(){
   document.body.removeChild(a); URL.revokeObjectURL(url);
   toast('Receipt downloaded ✓','ok');
 }
-document.addEventListener('keydown', e => { if(e.key==='Escape') closeReceiptBtn(); });
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape') closeReceiptBtn();
+  // Enter key to submit auth forms
+  if(e.key === 'Enter'){
+    if($('f-login') && $('f-login').style.display !== 'none' && $('pg-auth').classList.contains('on')) doLogin();
+    if($('f-register') && $('f-register').style.display !== 'none' && $('pg-auth').classList.contains('on')) doRegister();
+  }
+});
 
 /* ═══════════════════════════════════════════
    TOAST
@@ -1816,15 +1836,30 @@ function toast(msg, type='inf', ms=3400){
 /* ═══════════════════════════════════════════
    BOOT
 ═══════════════════════════════════════════ */
-seed();
+try {
+  seed();
+} catch(e) {
+  console.error('Seed error:', e);
+  // If seed fails, try clearing and re-seeding
+  localStorage.clear();
+  seed();
+}
 
 // Restore session
-const sess = DB.cu();
-if(sess){
-  const u = DB.users()[sess];
-  if(u && u.status==='active'){
-    CU=u; $('pg-auth').classList.remove('on'); $('pg-app').classList.add('on'); initApp();
+try {
+  const sess = DB.cu();
+  if(sess){
+    const u = DB.users()[sess];
+    if(u && u.status==='active'){
+      CU=u;
+      $('pg-auth').classList.remove('on');
+      $('pg-app').classList.add('on');
+      initApp();
+    }
   }
+} catch(e) {
+  console.error('Session restore error:', e);
+  DB.clearCu();
 }
 
 // Animate progress bars
