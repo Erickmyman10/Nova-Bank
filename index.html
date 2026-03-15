@@ -507,8 +507,12 @@ select.fi{cursor:pointer;-webkit-appearance:none}
 @media(max-width:599px){.g3{grid-template-columns:1fr}.g4{grid-template-columns:1fr 1fr}.admfg{grid-template-columns:1fr}.f2{grid-template-columns:1fr}.qa{grid-template-columns:repeat(2,1fr)}.sc-v{font-size:19px}}
 @media(max-width:479px){.g4,.qa{grid-template-columns:1fr 1fr}.pb{padding:10px}.card{padding:14px}.tb{padding:0 10px}.amtd{font-size:36px}.ar{padding:18px 14px}.bcard{padding:16px}.admfg{grid-template-columns:1fr}}
 </style>
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
 </head>
 <body>
+
 
 <!-- ═══════════ AUTH ═══════════ -->
 <div class="page on" id="pg-auth">
@@ -937,7 +941,13 @@ select.fi{cursor:pointer;-webkit-appearance:none}
             <div class="h3" style="color:var(--c1)">Administrator Control Panel</div>
             <div class="tsm mt4">Manage users, approve accounts &amp; set balances — only you have access</div>
           </div>
-          <div class="chip cn" style="margin-left:auto">ADMIN ACCESS</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
+            <button onclick="adminRefresh()" style="padding:6px 14px;font-size:11px;font-weight:700;background:rgba(0,114,206,.1);color:var(--c2);border:1.5px solid rgba(0,114,206,.2);border-radius:7px;cursor:pointer;display:flex;align-items:center;gap:5px;transition:all .18s" onmouseover="this.style.background='rgba(0,114,206,.16)'" onmouseout="this.style.background='rgba(0,114,206,.1)'">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+              Refresh
+            </button>
+            <div class="chip cn">ADMIN ACCESS</div>
+          </div>
         </div>
 
         <!-- ── PENDING APPROVALS ── -->
@@ -1065,25 +1075,116 @@ select.fi{cursor:pointer;-webkit-appearance:none}
   </div>
 </div>
 
+<!-- Firebase status banner -->
+<div id="fb-notice" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9998;background:#D97706;color:#fff;font-size:13px;font-weight:600;text-align:center;padding:10px 16px;box-shadow:0 2px 8px rgba(0,0,0,.2)">
+  ⚠️ Running in offline mode (localStorage only) — new user signups won't be visible across devices until Firebase is configured.
+  <a href="https://console.firebase.google.com" target="_blank" style="color:#fff;text-decoration:underline;margin-left:8px">Set up Firebase →</a>
+  <span onclick="this.parentElement.style.display='none'" style="cursor:pointer;margin-left:16px;font-size:16px">✕</span>
+</div>
+
 <!-- TOASTS -->
 <div style="position:fixed;bottom:22px;right:22px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none" id="toasts"></div>
 
+
 <script>
+
 /* ═══════════════════════════════════════════
    DATA LAYER  ·  localStorage
 ═══════════════════════════════════════════ */
-const APP_VER = 'nb6_v3'; // bump this any time you need a fresh seed
+/* ═══════════════════════════════════════════
+   FIREBASE CONFIG
+   Paste your Firebase config below.
+   Get it from: console.firebase.google.com
+   → Project Settings → Your apps → SDK setup
+═══════════════════════════════════════════ */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyA1YESNyOCmcs5dFRmBha9LkHhaGCPXvi0",
+  authDomain: "nova-bank-b4b24.firebaseapp.com",
+  databaseURL: "https://nova-bank-b4b24-default-rtdb.firebaseio.com",
+  projectId: "nova-bank-b4b24",
+  storageBucket: "nova-bank-b4b24.firebasestorage.app",
+  messagingSenderId: "1083900710534",
+  appId: "1:1083900710534:web:0b7739a5af8042da790b07"
+};
+
+/* ═══════════════════════════════════════════
+   DB LAYER  ·  Firebase + localStorage cache
+   Reads: instant from localStorage cache
+   Writes: update cache AND push to Firebase
+   On boot: sync from Firebase → cache
+═══════════════════════════════════════════ */
+let FIREBASE_READY = false;
+let FIREBASE_DB_REF = null;
+
+// Check if firebase config is set
+function isFirebaseConfigured(){
+  return FIREBASE_CONFIG.databaseURL &&
+         !FIREBASE_CONFIG.databaseURL.includes('PASTE_YOUR_PROJECT_ID');
+}
+
+// Initialize Firebase connection
+function initFirebase(){
+  if(!isFirebaseConfigured()) return;
+  try {
+    if(!firebase.apps || !firebase.apps.length){
+      firebase.initializeApp(FIREBASE_CONFIG);
+    }
+    FIREBASE_DB_REF = firebase.database();
+    FIREBASE_READY = true;
+    console.log('Firebase connected ✓');
+  } catch(e){
+    console.warn('Firebase init error:', e.message);
+    FIREBASE_READY = false;
+  }
+}
+
+// Push data to Firebase (fire-and-forget)
+function fbPush(key, val){
+  if(!FIREBASE_READY || !FIREBASE_DB_REF) return;
+  try {
+    FIREBASE_DB_REF.ref('novabank/'+key).set(val);
+  } catch(e){ console.warn('Firebase push error:', e); }
+}
+
+// Pull all data from Firebase into localStorage cache
+function fbSync(){
+  return new Promise(resolve => {
+    if(!FIREBASE_READY || !FIREBASE_DB_REF){ resolve(false); return; }
+    try {
+      FIREBASE_DB_REF.ref('novabank').once('value', snap => {
+        const data = snap.val();
+        if(data){
+          Object.entries(data).forEach(([k,v]) => {
+            localStorage.setItem('nb6_'+k, JSON.stringify(v));
+          });
+          console.log('Firebase sync complete ✓');
+        }
+        resolve(true);
+      });
+    } catch(e){ console.warn('Firebase sync error:', e); resolve(false); }
+  });
+}
+
+const APP_VER = 'nb6_v3';
 const DB = {
   _k: k => 'nb6_' + k,
   get(k)    { try{ return JSON.parse(localStorage.getItem(this._k(k))) }catch{ return null } },
-  set(k,v)  { localStorage.setItem(this._k(k), JSON.stringify(v)) },
+  set(k,v)  {
+    localStorage.setItem(this._k(k), JSON.stringify(v));
+    fbPush(k, v); // mirror to Firebase
+  },
   users()   { return this.get('u') || {} },
-  setUsers(u){ this.set('u', u) },
+  setUsers(u){
+    this.set('u', u);
+  },
   cu()      { return this.get('cu') },
   setCu(e)  { this.set('cu', e) },
   clearCu() { localStorage.removeItem(this._k('cu')) },
   txs(uid)  { return this.get('t_'+uid) || [] },
-  saveTxs(uid,t){ this.set('t_'+uid, t) },
+  saveTxs(uid,t){
+    localStorage.setItem(this._k('t_'+uid), JSON.stringify(t));
+    fbPush('t_'+uid, t);
+  },
   addTx(uid,tx){
     const t = this.txs(uid);
     tx.id = Date.now() + Math.random();
@@ -1094,9 +1195,8 @@ const DB = {
 
 /* ─── SEED ─── */
 function seed(){
-  // If version matches AND users exist, skip
-  if(localStorage.getItem('nb6_appver') === APP_VER && Object.keys(DB.users()).length > 0) return;
-  // Fresh start — clear any stale data
+  // If users already seeded for this version, skip
+  if(localStorage.getItem('nb6_appver') === APP_VER && Object.keys(DB.users()).length > 1) return;
   localStorage.setItem('nb6_appver', APP_VER);
   const colors = ['#0D6E5F','#1E3A8A','#6D28D9','#92400E','#065F46','#991B1B','#B45309'];
   DB.setUsers({
@@ -1510,6 +1610,15 @@ function changePw(){
 /* ═══════════════════════════════════════════
    ADMIN PANEL  (fully independent)
 ═══════════════════════════════════════════ */
+
+/* ── Admin: manual refresh from Firebase ── */
+function adminRefresh(){
+  if(FIREBASE_READY){
+    fbSync().then(()=>{ buildAdmin(); toast('Refreshed from cloud ✓','ok'); });
+  } else {
+    buildAdmin(); toast('Refreshed','ok');
+  }
+}
 function buildAdmin(){
   if(CU.role !== 'admin'){ nav('dashboard'); return; }
   const users = DB.users(), all = Object.values(users);
@@ -1834,41 +1943,73 @@ function toast(msg, type='inf', ms=3400){
 }
 
 /* ═══════════════════════════════════════════
-   BOOT
+   BOOT  ·  Firebase sync → seed → restore session
 ═══════════════════════════════════════════ */
-try {
-  seed();
-} catch(e) {
-  console.error('Seed error:', e);
-  // If seed fails, try clearing and re-seeding
-  localStorage.clear();
-  seed();
-}
+async function boot(){
+  // 1. Init Firebase connection
+  initFirebase();
 
-// Restore session
-try {
-  const sess = DB.cu();
-  if(sess){
-    const u = DB.users()[sess];
-    if(u && u.status==='active'){
-      CU=u;
-      $('pg-auth').classList.remove('on');
-      $('pg-app').classList.add('on');
-      initApp();
-    }
+  // 2. If Firebase is configured, pull latest data from cloud
+  if(FIREBASE_READY){
+    await fbSync();
+    // Listen for real-time updates (catches new signups instantly)
+    FIREBASE_DB_REF.ref('novabank/u').on('value', snap => {
+      const users = snap.val();
+      if(users){
+        localStorage.setItem('nb6_u', JSON.stringify(users));
+        // If admin is on the admin panel, refresh it live
+        if(CU && CU.role==='admin'){
+          const adm = document.getElementById('s-admin');
+          if(adm && adm.classList.contains('on')) buildAdmin();
+          updateAdminBadge();
+        }
+      }
+    });
   }
-} catch(e) {
-  console.error('Session restore error:', e);
-  DB.clearCu();
+
+  // 3. Seed default accounts if none exist
+  try {
+    seed();
+  } catch(e) {
+    console.error('Seed error:', e);
+    localStorage.clear();
+    seed();
+  }
+
+  // 4. Restore previous session
+  try {
+    const sess = DB.cu();
+    if(sess){
+      const u = DB.users()[sess];
+      if(u && u.status==='active'){
+        CU=u;
+        document.getElementById('pg-auth').classList.remove('on');
+        document.getElementById('pg-app').classList.add('on');
+        initApp();
+      }
+    }
+  } catch(e) {
+    console.error('Session restore error:', e);
+    DB.clearCu();
+  }
+
+  // 5. Animate progress bars
+  setTimeout(()=>{
+    document.querySelectorAll('.pbf').forEach(el => {
+      const w=el.style.width; el.style.width='0';
+      setTimeout(()=>el.style.width=w, 300);
+    });
+  }, 600);
 }
 
-// Animate progress bars
-setTimeout(()=>{
-  document.querySelectorAll('.pbf').forEach(el => {
-    const w=el.style.width; el.style.width='0';
-    setTimeout(()=>el.style.width=w, 300);
-  });
-}, 600);
+boot().then(() => {
+  // Show offline warning if Firebase is not configured
+  if(!isFirebaseConfigured()){
+    const notice = document.getElementById('fb-notice');
+    if(notice) notice.style.display = 'block';
+  }
+});
+
 </script>
 </body>
 </html>
